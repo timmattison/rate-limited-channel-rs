@@ -1,0 +1,12 @@
+[package]
+name = "rate-limited-channel-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A rate-limited channel implementation in Rust"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
