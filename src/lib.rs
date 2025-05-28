@@ -152,4 +152,117 @@ mod tests {
         
         assert_eq!(values.len(), 5);
     }
+    
+    #[tokio::test]
+    async fn test_rate_limited_channel_high_rate() {
+        const TEST_DURATION: Duration = Duration::from_millis(500);
+        const RATE_LIMIT: Duration = Duration::from_millis(1); // 1000 messages per second
+        
+        // Create input channel
+        let (input_tx, input_rx) = mpsc::channel::<i32>(10000); // Larger buffer for high rate
+        
+        // Create rate-limited output channel
+        let mut output_rx = to_rate_limited_channel(input_rx, RATE_LIMIT);
+        
+        // Track how many values we've written
+        let mut number_of_values_written = 0;
+        
+        // Start the writer task
+        let writer_handle = tokio::spawn(async move {
+            let end_time = Instant::now() + TEST_DURATION;
+            
+            while Instant::now() < end_time {
+                if let Err(_) = input_tx.send(number_of_values_written).await {
+                    break;
+                }
+                number_of_values_written += 1;
+                
+                // No sleep to send values as fast as possible
+            }
+            
+            number_of_values_written
+        });
+        
+        // Collect values from the rate-limited output channel with timeout
+        let mut values = Vec::new();
+        let collection_timeout = Duration::from_millis(1000); // Collection timeout longer than test duration
+        let collection_deadline = Instant::now() + collection_timeout;
+        
+        while Instant::now() < collection_deadline {
+            tokio::select! {
+                Some(value) = output_rx.recv() => {
+                    values.push(value);
+                }
+                _ = sleep(collection_timeout) => {
+                    break;
+                }
+            }
+        }
+        
+        // Wait for the writer task to complete
+        let number_of_values_written = writer_handle.await.unwrap();
+        
+        println!("High rate test: Received {} values, wrote {}", values.len(), number_of_values_written);
+        
+        // We should expect to receive approximately 500 values (1 per millisecond for 500ms)
+        // But allowing for some system variation, we'll check for a reasonable minimum
+        assert!(values.len() >= 400);
+    }
+    
+    #[tokio::test]
+    async fn test_rate_limited_channel_low_rate() {
+        const TEST_DURATION: Duration = Duration::from_millis(12000);
+        const RATE_LIMIT: Duration = Duration::from_secs(10); // One message every 10 seconds
+        
+        // Create input channel
+        let (input_tx, input_rx) = mpsc::channel::<i32>(100);
+        
+        // Create rate-limited output channel
+        let mut output_rx = to_rate_limited_channel(input_rx, RATE_LIMIT);
+        
+        // Track how many values we've written
+        let mut number_of_values_written = 0;
+        
+        // Start the writer task
+        let writer_handle = tokio::spawn(async move {
+            let end_time = Instant::now() + TEST_DURATION;
+            
+            while Instant::now() < end_time {
+                if let Err(_) = input_tx.send(number_of_values_written).await {
+                    break;
+                }
+                number_of_values_written += 1;
+                
+                // Small sleep to avoid overwhelming the channel
+                sleep(Duration::from_millis(100)).await;
+            }
+            
+            number_of_values_written
+        });
+        
+        // Collect values from the rate-limited output channel with timeout
+        let mut values = Vec::new();
+        let collection_timeout = Duration::from_millis(12500); // Just a bit longer than test duration
+        let collection_deadline = Instant::now() + collection_timeout;
+        
+        while Instant::now() < collection_deadline {
+            tokio::select! {
+                Some(value) = output_rx.recv() => {
+                    values.push(value);
+                }
+                _ = sleep(collection_timeout) => {
+                    break;
+                }
+            }
+        }
+        
+        // Wait for the writer task to complete
+        let number_of_values_written = writer_handle.await.unwrap();
+        
+        println!("Low rate test: Received {} values, wrote {}", values.len(), number_of_values_written);
+        
+        // With a 10-second rate limit and a 12-second test, we should see at least 1 value
+        // The first value should be emitted almost immediately, and the second around the 10-second mark
+        assert!(values.len() >= 1);
+    }
 }
